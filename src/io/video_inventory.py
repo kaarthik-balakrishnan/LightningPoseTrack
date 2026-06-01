@@ -26,47 +26,53 @@ def scan_videos(
     found_files = 0
     opened_ok = 0
     opened_fail = 0
-    for ext in video_extensions:
-        for video_path in sorted(root.rglob(f"*{ext}")):
-            if not video_path.is_file():
-                continue
-            found_files += 1
+    no_ext = 0
+    for entry in sorted(root.rglob("*")):
+        if not entry.is_file():
+            continue
+        if entry.suffix.lower() not in video_extensions:
+            no_ext += 1
             if verbose:
-                print(f"  Found: {video_path.name}", end="")
-            session = video_path.parent.name
-            camera = parse_camera_from_filename(video_path.name)
-            cap = cv2.VideoCapture(str(video_path))
-            if not cap.isOpened():
-                opened_fail += 1
-                if verbose:
-                    print(" — FAILED to open")
-                continue
-            opened_ok += 1
+                print(f"  Skipped (not video): {entry.name}")
+            continue
+        found_files += 1
+        if verbose:
+            print(f"  {entry.name}", end="")
+        session = entry.parent.name
+        camera = parse_camera_from_filename(entry.name)
+        cap = cv2.VideoCapture(str(entry))
+        if not cap.isOpened():
+            opened_fail += 1
             if verbose:
-                print(" — OK")
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            duration_sec = round(frame_count / fps, 2) if fps > 0 else 0.0
-            cap.release()
-            records.append(
-                {
-                    "filename": video_path.name,
-                    "path": str(video_path.relative_to(root)),
-                    "session": session,
-                    "camera": camera,
-                    "fps": round(fps, 2),
-                    "frame_count": frame_count,
-                    "width": width,
-                    "height": height,
-                    "duration_sec": duration_sec,
-                    "duration_min": round(duration_sec / 60, 2),
-                }
-            )
+                print(" — FAILED to open")
+            continue
+        opened_ok += 1
+        if verbose:
+            print(" — OK")
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        duration_sec = round(frame_count / fps, 2) if fps > 0 else 0.0
+        cap.release()
+        records.append(
+            {
+                "filename": entry.name,
+                "path": str(entry.relative_to(root)),
+                "session": session,
+                "camera": camera,
+                "fps": round(fps, 2),
+                "frame_count": frame_count,
+                "width": width,
+                "height": height,
+                "duration_sec": duration_sec,
+                "duration_min": round(duration_sec / 60, 2),
+            }
+        )
     if verbose:
         print(
-            f"\nSummary: {found_files} video files found, "
+            f"\nSummary: {found_files} video files (.asf/.mp4/etc.), "
+            f"{no_ext} non-video files, "
             f"{opened_ok} opened OK, {opened_fail} failed to open"
         )
     return pd.DataFrame(records)
