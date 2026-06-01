@@ -1,0 +1,15 @@
+# Core
+numpy
+pandas
+matplotlib
+scipy
+scikit-learn
+xgboost
+opencv-python
+pyarrow
+seaborn
+pyyaml
+tqdm
+
+# Pose estimation (install in dedicated notebook)
+# lightning-pose[all]
