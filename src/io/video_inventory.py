@@ -29,6 +29,16 @@ def scan_videos(
     opened_ok = 0
     opened_fail = 0
     no_ext = 0
+    if verbose:
+        print(f"  Root path: {root}")
+        print(f"  Path exists: {root.exists()}")
+        if root.exists():
+            entries = list(root.iterdir())[:20]
+            print(f"  First 20 entries: {[e.name for e in entries]}")
+        else:
+            print(f"  Parent exists: {root.parent.exists()}")
+            if root.parent.exists():
+                print(f"  Parent contents: {[e.name for e in root.parent.iterdir()][:20]}")
     for dirpath_str, dirnames, filenames in os.walk(root):
         dirpath = Path(dirpath_str)
         for filename in sorted(filenames):
