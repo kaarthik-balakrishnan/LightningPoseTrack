@@ -1,7 +1,26 @@
 import cv2
+import imageio
 import random
 import numpy as np
 from pathlib import Path
+
+
+def open_video(video_path: str | Path):
+    reader = imageio.get_reader(str(video_path), format="ffmpeg")
+    return reader
+
+
+def frame_count(reader) -> int:
+    try:
+        return reader.count_frames()
+    except Exception:
+        return 0
+
+
+def read_frame(reader, idx: int) -> np.ndarray:
+    frame_rgb = reader.get_data(idx)
+    frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    return frame_bgr
 
 
 def compute_motion_score(prev_gray: np.ndarray, curr_gray: np.ndarray) -> float:
@@ -10,101 +29,100 @@ def compute_motion_score(prev_gray: np.ndarray, curr_gray: np.ndarray) -> float:
 
 
 def sample_uniform(video_path: str | Path, n_frames: int):
-    cap = cv2.VideoCapture(str(video_path))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    reader = open_video(video_path)
+    total = frame_count(reader)
     if total == 0:
-        cap.release()
+        reader.close()
         return []
     indices = np.linspace(0, total - 1, n_frames, dtype=int).tolist()
     frames = []
     for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if ret:
+        try:
+            frame = read_frame(reader, idx)
             frames.append((idx, frame))
-    cap.release()
+        except Exception:
+            continue
+    reader.close()
     return frames
 
 
 def sample_random(video_path: str | Path, n_frames: int, seed: int = 42):
     random.seed(seed)
-    cap = cv2.VideoCapture(str(video_path))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    reader = open_video(video_path)
+    total = frame_count(reader)
     if total == 0:
-        cap.release()
+        reader.close()
         return []
     indices = sorted(random.sample(range(total), min(n_frames, total)))
     frames = []
     for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if ret:
+        try:
+            frame = read_frame(reader, idx)
             frames.append((idx, frame))
-    cap.release()
+        except Exception:
+            continue
+    reader.close()
     return frames
 
 
 def sample_motion_based(
     video_path: str | Path, n_frames: int, motion_threshold: float = 15.0
 ):
-    cap = cv2.VideoCapture(str(video_path))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    reader = open_video(video_path)
+    total = frame_count(reader)
     if total == 0:
-        cap.release()
+        reader.close()
         return []
     scores = []
-    ret, prev_frame = cap.read()
-    if not ret:
-        cap.release()
-        return []
-    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+    prev_frame_rgb = None
     frame_idx = 0
-    scores.append((frame_idx, 0.0))
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame_idx += 1
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        score = compute_motion_score(prev_gray, gray)
+    for frame_rgb in reader:
+        if prev_frame_rgb is None:
+            prev_frame_rgb = frame_rgb
+            scores.append((frame_idx, 0.0))
+            frame_idx += 1
+            continue
+        prev_gray = cv2.cvtColor(prev_frame_rgb, cv2.COLOR_RGB2GRAY)
+        curr_gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+        score = compute_motion_score(prev_gray, curr_gray)
         scores.append((frame_idx, score))
-        prev_gray = gray
-    cap.release()
+        prev_frame_rgb = frame_rgb
+        frame_idx += 1
+    reader.close()
     high_motion = [i for i, s in scores if s > motion_threshold]
     if not high_motion:
         high_motion = [i for i, _ in scores]
     selected = sorted(random.sample(high_motion, min(n_frames, len(high_motion))))
-    cap = cv2.VideoCapture(str(video_path))
+    reader = open_video(video_path)
     frames = []
     for idx in selected:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if ret:
+        try:
+            frame = read_frame(reader, idx)
             frames.append((idx, frame))
-    cap.release()
+        except Exception:
+            continue
+    reader.close()
     return frames
 
 
 def compute_background(video_path: str | Path, sample_every_n: int = 100) -> np.ndarray | None:
-    cap = cv2.VideoCapture(str(video_path))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    reader = open_video(video_path)
+    total = frame_count(reader)
     if total == 0:
-        cap.release()
+        reader.close()
         return None
-    frames = []
+    bg_frames = []
     frame_idx = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    for frame_rgb in reader:
         if frame_idx % sample_every_n == 0:
-            frames.append(frame.astype(np.float32))
+            bg_frames.append(frame_rgb.astype(np.float32))
         frame_idx += 1
-    cap.release()
-    if not frames:
+    reader.close()
+    if not bg_frames:
         return None
-    background = np.median(np.stack(frames, axis=0), axis=0).astype(np.uint8)
-    return background
+    background_rgb = np.median(np.stack(bg_frames, axis=0), axis=0).astype(np.uint8)
+    background_bgr = cv2.cvtColor(background_rgb, cv2.COLOR_RGB2BGR)
+    return background_bgr
 
 
 def detect_animal(
@@ -135,33 +153,32 @@ def sample_with_background_subtraction(
         background = compute_background(video_path, sample_every_n)
     if background is None:
         return []
-    cap = cv2.VideoCapture(str(video_path))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    reader = open_video(video_path)
+    total = frame_count(reader)
     if total == 0:
-        cap.release()
+        reader.close()
         return []
     candidates = []
     frame_idx = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        present, _ = detect_animal(frame, background, threshold, min_pixels)
+    for frame_rgb in reader:
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        present, _ = detect_animal(frame_bgr, background, threshold, min_pixels)
         if present:
             candidates.append(frame_idx)
         frame_idx += 1
-    cap.release()
+    reader.close()
     if not candidates:
         return []
     selected = sorted(random.sample(candidates, min(n_frames, len(candidates))))
-    cap = cv2.VideoCapture(str(video_path))
+    reader = open_video(video_path)
     frames = []
     for idx in selected:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if ret:
+        try:
+            frame = read_frame(reader, idx)
             frames.append((idx, frame))
-    cap.release()
+        except Exception:
+            continue
+    reader.close()
     return frames
 
 

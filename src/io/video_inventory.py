@@ -1,6 +1,6 @@
 import os
 import re
-import cv2
+import imageio
 import pandas as pd
 from pathlib import Path
 
@@ -42,21 +42,22 @@ def scan_videos(
                 print(f"  {filename}", end="")
             session = dirpath.name
             camera = parse_camera_from_filename(filename)
-            cap = cv2.VideoCapture(str(filepath))
-            if not cap.isOpened():
+            try:
+                reader = imageio.get_reader(str(filepath), format="ffmpeg")
+                meta = reader.get_meta_data()
+                fps = meta.get("fps", 0)
+                video_frame_count = reader.count_frames()
+                width, height = meta.get("size", (0, 0))
+                reader.close()
+                opened_ok += 1
+                if verbose:
+                    print(" — OK")
+            except Exception:
                 opened_fail += 1
                 if verbose:
                     print(" — FAILED to open")
                 continue
-            opened_ok += 1
-            if verbose:
-                print(" — OK")
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            duration_sec = round(frame_count / fps, 2) if fps > 0 else 0.0
-            cap.release()
+            duration_sec = round(video_frame_count / fps, 2) if fps > 0 else 0.0
             records.append(
                 {
                     "filename": filename,
@@ -64,7 +65,7 @@ def scan_videos(
                     "session": session,
                     "camera": camera,
                     "fps": round(fps, 2),
-                    "frame_count": frame_count,
+                    "frame_count": video_frame_count,
                     "width": width,
                     "height": height,
                     "duration_sec": duration_sec,
