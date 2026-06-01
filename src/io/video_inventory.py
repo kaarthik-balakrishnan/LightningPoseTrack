@@ -5,7 +5,7 @@ from pathlib import Path
 
 def parse_camera_from_filename(filename: str) -> int:
     stem = Path(filename).stem
-    parts = stem.split("_")
+    parts = re.split(r"[-_]+", stem)
     for part in reversed(parts):
         try:
             num = int(part)
