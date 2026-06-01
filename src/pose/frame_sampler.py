@@ -1,128 +1,130 @@
-import cv2
-import imageio
+import json
 import random
+import subprocess
+import cv2
 import numpy as np
 from pathlib import Path
 
 
-def open_video(video_path: str | Path):
-    reader = imageio.get_reader(str(video_path), format="ffmpeg")
-    return reader
+def probe(video_path: str | Path) -> dict:
+    result = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json",
+         "-show_format", "-show_streams", str(video_path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    info = json.loads(result.stdout)
+    for s in info.get("streams", []):
+        if s.get("codec_type") == "video":
+            w = int(s.get("width", 0))
+            h = int(s.get("height", 0))
+            rfr = s.get("r_frame_rate", "0/1")
+            num, den = rfr.split("/")
+            fps = float(num) / float(den) if float(den) > 0 else 0.0
+            nf = s.get("nb_frames")
+            if nf is None:
+                dur = float(info.get("format", {}).get("duration", 0))
+                nf = int(dur * fps) if fps > 0 else 0
+            else:
+                nf = int(nf)
+            return {"width": w, "height": h, "fps": fps, "frame_count": nf,
+                    "codec": s.get("codec_name", "?")}
+    raise ValueError("no video stream")
 
 
-def frame_count(reader) -> int:
+def stream_frames(video_path: str | Path, width: int, height: int):
+    frame_size = width * height * 3
+    cmd = [
+        "ffmpeg", "-y", "-i", str(video_path),
+        "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    idx = 0
     try:
-        return reader.count_frames()
-    except Exception:
-        return 0
+        while True:
+            chunk = proc.stdout.read(frame_size)
+            if len(chunk) < frame_size:
+                break
+            frame = np.frombuffer(chunk, dtype=np.uint8).reshape(height, width, 3)
+            yield idx, frame
+            idx += 1
+    finally:
+        proc.stdout.close()
+        proc.wait()
 
 
-def read_frame(reader, idx: int) -> np.ndarray:
-    frame_rgb = reader.get_data(idx)
-    frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-    return frame_bgr
-
-
-def compute_motion_score(prev_gray: np.ndarray, curr_gray: np.ndarray) -> float:
-    diff = cv2.absdiff(prev_gray, curr_gray)
-    return float(np.mean(diff))
+def extract_frames(video_path: str | Path, width: int, height: int,
+                   indices: list[int]) -> list[tuple[int, np.ndarray]]:
+    if not indices:
+        return []
+    sel = "+".join(f"eq(n,{i})" for i in indices)
+    cmd = [
+        "ffmpeg", "-y", "-i", str(video_path),
+        "-vf", f"select='{sel}'", "-vsync", "0",
+        "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=300)
+    fs = width * height * 3
+    frames = []
+    for i in range(0, len(result.stdout), fs):
+        chunk = result.stdout[i:i + fs]
+        if len(chunk) == fs:
+            frames.append(np.frombuffer(chunk, dtype=np.uint8).reshape(height, width, 3))
+    return list(zip(indices[:len(frames)], frames))
 
 
 def sample_uniform(video_path: str | Path, n_frames: int):
-    reader = open_video(video_path)
-    total = frame_count(reader)
+    try:
+        info = probe(video_path)
+    except Exception:
+        return []
+    total = info["frame_count"]
     if total == 0:
-        reader.close()
         return []
     indices = np.linspace(0, total - 1, n_frames, dtype=int).tolist()
-    frames = []
-    for idx in indices:
-        try:
-            frame = read_frame(reader, idx)
-            frames.append((idx, frame))
-        except Exception:
-            continue
-    reader.close()
-    return frames
+    try:
+        return extract_frames(video_path, info["width"], info["height"], indices)
+    except Exception:
+        return []
 
 
 def sample_random(video_path: str | Path, n_frames: int, seed: int = 42):
     random.seed(seed)
-    reader = open_video(video_path)
-    total = frame_count(reader)
+    try:
+        info = probe(video_path)
+    except Exception:
+        return []
+    total = info["frame_count"]
     if total == 0:
-        reader.close()
         return []
     indices = sorted(random.sample(range(total), min(n_frames, total)))
-    frames = []
-    for idx in indices:
-        try:
-            frame = read_frame(reader, idx)
-            frames.append((idx, frame))
-        except Exception:
-            continue
-    reader.close()
-    return frames
+    try:
+        return extract_frames(video_path, info["width"], info["height"], indices)
+    except Exception:
+        return []
 
 
 def sample_motion_based(
     video_path: str | Path, n_frames: int, motion_threshold: float = 15.0
 ):
-    reader = open_video(video_path)
-    total = frame_count(reader)
-    if total == 0:
-        reader.close()
-        return []
-    scores = []
-    prev_frame_rgb = None
-    frame_idx = 0
-    for frame_rgb in reader:
-        if prev_frame_rgb is None:
-            prev_frame_rgb = frame_rgb
-            scores.append((frame_idx, 0.0))
-            frame_idx += 1
-            continue
-        prev_gray = cv2.cvtColor(prev_frame_rgb, cv2.COLOR_RGB2GRAY)
-        curr_gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
-        score = compute_motion_score(prev_gray, curr_gray)
-        scores.append((frame_idx, score))
-        prev_frame_rgb = frame_rgb
-        frame_idx += 1
-    reader.close()
-    high_motion = [i for i, s in scores if s > motion_threshold]
-    if not high_motion:
-        high_motion = [i for i, _ in scores]
-    selected = sorted(random.sample(high_motion, min(n_frames, len(high_motion))))
-    reader = open_video(video_path)
-    frames = []
-    for idx in selected:
-        try:
-            frame = read_frame(reader, idx)
-            frames.append((idx, frame))
-        except Exception:
-            continue
-    reader.close()
-    return frames
+    raise NotImplementedError("Use sample_with_background_subtraction instead")
 
 
 def compute_background(video_path: str | Path, sample_every_n: int = 100) -> np.ndarray | None:
-    reader = open_video(video_path)
-    total = frame_count(reader)
+    try:
+        info = probe(video_path)
+    except Exception:
+        return None
+    total = info["frame_count"]
     if total == 0:
-        reader.close()
         return None
-    bg_frames = []
-    frame_idx = 0
-    for frame_rgb in reader:
-        if frame_idx % sample_every_n == 0:
-            bg_frames.append(frame_rgb.astype(np.float32))
-        frame_idx += 1
-    reader.close()
-    if not bg_frames:
+    w, h = info["width"], info["height"]
+    accum = []
+    for idx, frame_bgr in stream_frames(video_path, w, h):
+        if idx % sample_every_n == 0:
+            accum.append(frame_bgr.astype(np.float32))
+    if not accum:
         return None
-    background_rgb = np.median(np.stack(bg_frames, axis=0), axis=0).astype(np.uint8)
-    background_bgr = cv2.cvtColor(background_rgb, cv2.COLOR_RGB2BGR)
-    return background_bgr
+    return np.median(np.stack(accum, axis=0), axis=0).astype(np.uint8)
 
 
 def detect_animal(
@@ -153,36 +155,30 @@ def sample_with_background_subtraction(
         background = compute_background(video_path, sample_every_n)
     if background is None:
         return []
-    reader = open_video(video_path)
-    total = frame_count(reader)
-    if total == 0:
-        reader.close()
+    try:
+        info = probe(video_path)
+    except Exception:
         return []
+    total = info["frame_count"]
+    if total == 0:
+        return []
+    w, h = info["width"], info["height"]
     candidates = []
-    frame_idx = 0
-    for frame_rgb in reader:
-        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    for idx, frame_bgr in stream_frames(video_path, w, h):
         present, _ = detect_animal(frame_bgr, background, threshold, min_pixels)
         if present:
-            candidates.append(frame_idx)
-        frame_idx += 1
-    reader.close()
+            candidates.append(idx)
     if not candidates:
         return []
     selected = sorted(random.sample(candidates, min(n_frames, len(candidates))))
-    reader = open_video(video_path)
-    frames = []
-    for idx in selected:
-        try:
-            frame = read_frame(reader, idx)
-            frames.append((idx, frame))
-        except Exception:
-            continue
-    reader.close()
-    return frames
+    try:
+        return extract_frames(video_path, w, h, selected)
+    except Exception:
+        return []
 
 
-def save_frame(output_dir: str | Path, session: str, camera: int, video_stem: str, frame_idx: int, frame: np.ndarray):
+def save_frame(output_dir: str | Path, session: str, camera: int,
+               video_stem: str, frame_idx: int, frame: np.ndarray):
     out_dir = Path(output_dir) / session
     out_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{video_stem}_cam{camera}_frame{frame_idx:06d}.jpg"

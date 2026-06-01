@@ -1,6 +1,7 @@
 import os
 import re
-import imageio
+import json
+import subprocess
 import pandas as pd
 from pathlib import Path
 
@@ -43,19 +44,38 @@ def scan_videos(
             session = dirpath.name
             camera = parse_camera_from_filename(filename)
             try:
-                reader = imageio.get_reader(str(filepath), format="ffmpeg")
-                meta = reader.get_meta_data()
-                fps = meta.get("fps", 0)
-                video_frame_count = reader.count_frames()
-                width, height = meta.get("size", (0, 0))
-                reader.close()
+                result = subprocess.run(
+                    ["ffprobe", "-v", "quiet", "-print_format", "json",
+                     "-show_format", "-show_streams", str(filepath)],
+                    capture_output=True, text=True, timeout=30,
+                )
+                info = json.loads(result.stdout)
+                video_stream = None
+                for s in info.get("streams", []):
+                    if s.get("codec_type") == "video":
+                        video_stream = s
+                        break
+                if video_stream is None:
+                    raise ValueError("no video stream")
+                width = int(video_stream.get("width", 0))
+                height = int(video_stream.get("height", 0))
+                r_frame_rate = video_stream.get("r_frame_rate", "0/1")
+                num, den = r_frame_rate.split("/")
+                fps = float(num) / float(den) if float(den) > 0 else 0.0
+                nb_frames = video_stream.get("nb_frames")
+                if nb_frames is None:
+                    duration = float(info.get("format", {}).get("duration", 0))
+                    nb_frames = int(duration * fps) if fps > 0 else 0
+                else:
+                    nb_frames = int(nb_frames)
                 opened_ok += 1
                 if verbose:
-                    print(" — OK")
-            except Exception:
+                    codec = video_stream.get("codec_name", "?")
+                    print(f" — OK ({codec}, {width}x{height}, {fps:.1f} fps, {nb_frames}f)")
+            except Exception as e:
                 opened_fail += 1
                 if verbose:
-                    print(" — FAILED to open")
+                    print(f" — FAILED ({e})")
                 continue
             duration_sec = round(video_frame_count / fps, 2) if fps > 0 else 0.0
             records.append(
