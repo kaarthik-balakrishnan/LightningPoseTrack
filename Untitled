@@ -1,0 +1,10 @@
+from pathlib import Path
+from src.io.video_inventory import scan_videos
+from src.pose.frame_sampler import (
+    compute_background, detect_animal,
+    sample_with_background_subtraction, save_frame
+)
+
+df = scan_videos(DRIVE_RAW_VIDEOS)
+print(f"Found {len(df)} videos")
+df[["filename", "session", "camera", "duration_min"]]
