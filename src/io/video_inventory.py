@@ -77,7 +77,7 @@ def scan_videos(
                 if verbose:
                     print(f" — FAILED ({e})")
                 continue
-            duration_sec = round(video_frame_count / fps, 2) if fps > 0 else 0.0
+            duration_sec = round(nb_frames / fps, 2) if fps > 0 else 0.0
             records.append(
                 {
                     "filename": filename,
@@ -85,7 +85,7 @@ def scan_videos(
                     "session": session,
                     "camera": camera,
                     "fps": round(fps, 2),
-                    "frame_count": video_frame_count,
+                    "frame_count": nb_frames,
                     "width": width,
                     "height": height,
                     "duration_sec": duration_sec,
