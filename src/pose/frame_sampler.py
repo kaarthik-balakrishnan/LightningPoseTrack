@@ -56,6 +56,7 @@ def extract_frames(video_path: str | Path, width: int, height: int,
                    indices: list[int]) -> list[tuple[int, np.ndarray]]:
     if not indices:
         return []
+    indices = sorted(indices)
     sel = "+".join(f"eq(n,{i})" for i in indices)
     cmd = [
         "ffmpeg", "-y", "-i", str(video_path),

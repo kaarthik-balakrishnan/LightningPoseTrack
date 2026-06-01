@@ -1,3 +1,5 @@
+import base64
+import tempfile
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -126,7 +128,6 @@ def generate_html_report(
     total_frames = len(pose_df) if pose_df is not None else 0
     duration_min = round(total_frames / fps / 60, 2) if fps > 0 else 0
     image_paths = []
-    import tempfile
     with tempfile.TemporaryDirectory() as tmpdir:
         fig, ax = plt.subplots(figsize=(8, 4))
         ax.axis("off")
@@ -172,7 +173,6 @@ def generate_html_report(
             html += f"<p><b>Feeding Events:</b> {len(feeding_events)} | <b>Total Feeding:</b> {feeding_events['duration_sec'].sum():.1f}s</p>"
         html += "</div>"
         for img_path in image_paths:
-            import base64
             with open(img_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()
             html += f"<div class='section'><img src='data:image/png;base64,{b64}'/></div>"

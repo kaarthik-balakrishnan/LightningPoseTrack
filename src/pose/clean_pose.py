@@ -31,13 +31,13 @@ def clean_pose_df(
         result[y_col] = interpolate_gaps(result[y_col], max_gap=max_consecutive_gap)
         if result[x_col].notna().sum() > window_length:
             result[x_col] = savgol_filter(
-                result[x_col].fillna(method="ffill").fillna(method="bfill"),
+                result[x_col].ffill().bfill(),
                 window_length=min(window_length, len(result) | 1),
                 polyorder=polyorder,
             )
         if result[y_col].notna().sum() > window_length:
             result[y_col] = savgol_filter(
-                result[y_col].fillna(method="ffill").fillna(method="bfill"),
+                result[y_col].ffill().bfill(),
                 window_length=min(window_length, len(result) | 1),
                 polyorder=polyorder,
             )
