@@ -38,11 +38,9 @@ def convert_labelme_to_lp_csv(
             if kp in kp_map:
                 row[f"{kp}_x"] = kp_map[kp][0]
                 row[f"{kp}_y"] = kp_map[kp][1]
-                row[f"{kp}_likelihood"] = 1.0
             else:
                 row[f"{kp}_x"] = 0.0
                 row[f"{kp}_y"] = 0.0
-                row[f"{kp}_likelihood"] = 0.0
         records.append(row)
 
     df = pd.DataFrame(records)
@@ -50,16 +48,16 @@ def convert_labelme_to_lp_csv(
 
     with open(output_csv, "w", newline="") as f:
         writer = csv.writer(f)
-        header_1 = [scorer] * (1 + len(KEYPOINT_NAMES) * 3)
-        header_2 = ["image"] + [k for kp in KEYPOINT_NAMES for k in (kp, kp, kp)]
-        header_3 = [""] + ["x", "y", "likelihood"] * len(KEYPOINT_NAMES)
+        header_1 = [scorer] * (1 + len(KEYPOINT_NAMES) * 2)
+        header_2 = ["image"] + [k for kp in KEYPOINT_NAMES for k in (kp, kp)]
+        header_3 = [""] + ["x", "y"] * len(KEYPOINT_NAMES)
         writer.writerow(header_1)
         writer.writerow(header_2)
         writer.writerow(header_3)
         for img_name, row in df.iterrows():
             vals = [img_name]
             for kp in KEYPOINT_NAMES:
-                vals.extend([row[f"{kp}_x"], row[f"{kp}_y"], row[f"{kp}_likelihood"]])
+                vals.extend([row[f"{kp}_x"], row[f"{kp}_y"]])
             writer.writerow(vals)
 
     return str(output_csv)
