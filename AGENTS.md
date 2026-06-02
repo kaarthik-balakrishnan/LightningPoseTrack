@@ -14,6 +14,7 @@ End-to-end pig behavior analysis pipeline using Lightning Pose for pose estimati
 - **GitHub**: https://github.com/kaarthik-balakrishnan/LightningPoseTrack
 - **Drive folder ID**: `1X_41ZW3HfwVeft2lPld3XNqXsdxRDIwb` (shared, contains raw videos)
 - **Raw videos**: Organized by session folders, camera encoded in filename as `_N.asf` (N=1-4, hyphen-delimited, e.g. `180422-3.asf`)
+- **Docker Hub**: `kaarthikbalakrishnan/lightningposetrack:latest` — GPU image auto-built by GH Action on push to main
 
 ## Pipeline (8 notebooks)
 | # | Notebook | Purpose |
@@ -46,11 +47,78 @@ Bilateral keypoints (left_ear, right_ear) are marked at the midline midpoint whe
 - **Hyphen-delimited camera parsing**: Parser splits on both hyphens and underscores (`re.split(r"[-_]+", stem)`)
 - **Background subtraction for frame sampling**: In notebook 02, median background is computed per video to detect animal presence before saving frames
 - **LabelMe labels**: No group ID needed; just the exact keypoint name string per point annotation
+- **Docker for local dev only**: CPU Dockerfile for VS Code editing; GPU training stays on Colab
+
+## Dev Container Setup
+
+### Files
+| File | Purpose |
+|------|---------|
+| `.devcontainer/Dockerfile` | CPU-only, for local VS Code dev (Python 3.12, PyTorch CPU, Jupyter) |
+| `.devcontainer/Dockerfile.gpu` | GPU image based on `pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime` |
+| `.devcontainer/devcontainer.json` | VS Code config — Python/Jupyter extensions, port forwarding |
+| `.devcontainer/build_on_colab.ipynb` | Colab launchpad — installs everything + opencode, has notebook runner |
+| `.devcontainer/README.md` | Documentation for all workflows |
+| `.github/workflows/docker-gpu.yml` | GH Action: on push to main, builds GPU image, pushes to Docker Hub |
+| `dev/colab_runner.py` | Colab notebook runner — executes notebooks headlessly, captures errors |
+
+### Three Workflows
+
+**1. Local Dev (CPU)** — VS Code Dev Containers: `Ctrl+Shift+P → "Reopen in Container"`
+- Edit code, lint, test non-GPU modules
+- No GPU — training stays on Colab
+
+**2. Colab Direct (recommended)** — Open `build_on_colab.ipynb` on Colab with GPU runtime, Run All
+- Installs everything directly on Colab VM (no Docker)
+- Sets up Drive mount, repo clone, packages, opencode CLI
+
+**3. Colab Docker (experimental)** — Same notebook, set `MODE = "docker"`
+- Most Colab runtimes don't support nested Docker
+- Falls back to direct mode automatically
+
+### The Fix Loop (opencode + Colab)
+This is the core pattern for debugging notebooks:
+
+1. On Colab: open `build_on_colab.ipynb` → Run All
+2. Change `NOTEBOOK_NUM = "01"` (or any number 01-08) and run the runner cell
+3. `dev/colab_runner.py` executes the notebook via `jupyter nbconvert --execute`
+4. On success → move to next notebook number
+5. On failure → full traceback saved to `/tmp/colab_error.txt`
+6. User copies the error from the display cell and pastes it to opencode
+7. opencode fixes the code → `git add/commit/push`
+8. User re-runs the same runner cell — it auto-runs `git pull` before executing
+9. Loop repeats until notebook passes
+
+### Known Issues & Fixes
+
+#### Notebook 03: `ConfigAttributeError: Missing key dali`
+- **Cause**: `losses_to_use: ["pca_singleview"]` makes Lightning Pose think it's semi-supervised, which requires a `dali` config section
+- **Fix**: Set `losses_to_use: []` for purely supervised training (no unlabeled data needed)
+- Also add `train_frames: null` to training config
+- Already applied to `notebooks/03_Pose_Training.ipynb`
+
+#### Docker on Colab
+- **Cause**: Colab runs inside its own container — nested Docker requires privileged mode
+- **Fix**: Use direct install mode (`MODE = "direct"`) instead. Docker image is for local dev and GPU cloud servers, not Colab.
+
+#### GitHub Actions Node.js 20 deprecation
+- Warning about actions using Node.js 20 (will stop working Sept 2026)
+- Fix: update action versions or set `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`
 
 ## Directory Structure
 ```
 LightningPoseTrack/
-├── notebooks/          # 8 Colab notebooks (01-08)
+├── .devcontainer/       # Dev Container config (Dockerfiles, VS Code, Colab runner notebook)
+│   ├── Dockerfile       # CPU local dev
+│   ├── Dockerfile.gpu   # GPU for cloud
+│   ├── devcontainer.json
+│   ├── build_on_colab.ipynb
+│   └── README.md
+├── .github/workflows/
+│   └── docker-gpu.yml   # Auto-build GPU image on push to main
+├── dev/
+│   └── colab_runner.py  # Headless notebook executor for the fix loop
+├── notebooks/           # 8 Colab notebooks (01-08)
 ├── src/
 │   ├── io/
 │   │   └── video_inventory.py   # scan_videos(), parse_camera_from_filename()
@@ -66,7 +134,7 @@ LightningPoseTrack/
 │   │   └── feeding.py           # Rule-based feeding detection
 │   └── reports/
 │       └── daily_report.py      # HTML/PDF report generation
-├── requirements_colab.txt
+├── requirements-colab.txt
 ├── setup_colab.sh
 ├── .gitignore
 └── AGENTS.md
@@ -79,6 +147,8 @@ LightningPoseTrack/
 - Background subtraction functions added to `src/pose/frame_sampler.py`
 - Notebook 02 rewritten to use background subtraction for animal detection
 - Notebook 03 includes auto-converter cell (LabelMe JSON → LP CSV)
+- Notebook 03 fixed: `losses_to_use: []` + `train_frames: null` (dali key error)
+- Dev Container setup: CPU Dockerfile, GPU Dockerfile, devcontainer.json, GH Action, colab_runner.py
 - TODO: Label frames, run notebooks 03-08
 
 ## Labeling Instructions
