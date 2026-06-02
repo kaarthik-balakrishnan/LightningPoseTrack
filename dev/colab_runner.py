@@ -3,9 +3,10 @@ Colab Runner — execute a Jupyter notebook headlessly on Colab,
 capture errors, and enable the opencode fix loop.
 
 Usage:
-    python dev/colab_runner.py [--drive-root PATH] notebooks/XX.ipynb
+    python dev/colab_runner.py [--path KEY=VALUE ...] notebooks/XX.ipynb
 
-    --drive-root  Override DRIVE_ROOT in the notebook config before running.
+    --path KEY=VALUE  Override variable KEY with VALUE in notebook config.
+                      Can be specified multiple times (e.g. --path A=x --path B=y).
 
 On success: exit 0
 On error:   saves traceback to /tmp/colab_error.txt, prints details, exit 1
@@ -20,19 +21,23 @@ The fix loop:
 import os
 import sys
 import json
-import re
 import subprocess
 import tempfile
 import shutil
 from pathlib import Path
 
 
-def inject_drive_root(nb: dict, drive_root: str) -> bool:
-    """Replace DRIVE_ROOT in the notebook's config cell in-place.
-    Returns True if a replacement was made."""
-    if not drive_root:
+def inject_variables(nb: dict, overrides: dict) -> bool:
+    """Replace any variable assignment in notebook code cells with values
+    from *overrides*. Works for assignments of the form::
+
+        VAR_NAME = "value"   or   VAR_NAME = f"..."
+
+    Preserves indentation and trailing comments. Returns True if any
+    replacement was made.
+    """
+    if not overrides:
         return False
-    target_line = f'DRIVE_ROOT = "{drive_root}"'
     modified = False
     for cell in nb.get("cells", []):
         if cell["cell_type"] != "code":
@@ -42,18 +47,25 @@ def inject_drive_root(nb: dict, drive_root: str) -> bool:
             src = [src]
         for i, line in enumerate(src):
             stripped = line.strip()
-            if stripped.startswith("DRIVE_ROOT = "):
-                # Preserve existing indentation and any comment after
-                indent = line[:len(line) - len(line.lstrip())]
-                comment = ""
-                if "#" in line:
-                    comment = "  " + line.split("#", 1)[1].rstrip("\n")
-                src[i] = f'{indent}{target_line}{comment}\n'
-                modified = True
+            for key, value in overrides.items():
+                if stripped.startswith(f"{key} = ") or stripped.startswith(f"{key}="):
+                    indent = line[:len(line) - len(line.lstrip())]
+                    # Preserve any trailing comment
+                    comment = ""
+                    if "#" in line:
+                        comment = "  " + line.split("#", 1)[1].rstrip("\n")
+                    # Quote value if it contains / (looks like a path) and isn't already quoted
+                    val_str = value
+                    if "/" in value and not (value.startswith('"') or value.startswith("'")):
+                        val_str = f'"{value}"'
+                    src[i] = f'{indent}{key} = {val_str}{comment}\n'
+                    modified = True
+                    break  # once matched on this line, move to next line
     return modified
 
 
-def run_notebook(notebook_path: str, timeout: int = 3600, drive_root: str = None) -> dict:
+def run_notebook(notebook_path: str, timeout: int = 3600,
+                 path_overrides: dict = None) -> dict:
     """Execute a notebook via nbconvert and return results.
 
     Returns dict with keys: success, output, error, notebook_path
@@ -72,14 +84,15 @@ def run_notebook(notebook_path: str, timeout: int = 3600, drive_root: str = None
     tmp_nb = tmpdir / nb_path.name
     shutil.copy2(nb_path, tmp_nb)
 
-    # Inject DRIVE_ROOT into the temp copy if provided
-    if drive_root:
+    # Inject path overrides into the temp copy if provided
+    if path_overrides:
         with open(tmp_nb) as f:
             nb_data = json.load(f)
-        if inject_drive_root(nb_data, drive_root):
+        if inject_variables(nb_data, path_overrides):
             with open(tmp_nb, "w") as f:
                 json.dump(nb_data, f, indent=1, ensure_ascii=False)
-            print(f"  Injected DRIVE_ROOT={drive_root}")
+            for k, v in path_overrides.items():
+                print(f"  Injected {k}={v}")
 
     cmd = [
         sys.executable, "-m", "jupyter", "nbconvert", "--to", "notebook",
@@ -119,14 +132,15 @@ def run_notebook(notebook_path: str, timeout: int = 3600, drive_root: str = None
         }
 
 
-def run_pipeline(notebooks: list, timeout: int = 3600, drive_root: str = None) -> list:
+def run_pipeline(notebooks: list, timeout: int = 3600,
+                 path_overrides: dict = None) -> list:
     """Run multiple notebooks in sequence. Stops on first failure."""
     results = []
     for nb in notebooks:
         print(f"\n{'=' * 60}")
         print(f"Running: {nb}")
         print(f"{'=' * 60}")
-        r = run_notebook(nb, timeout=timeout, drive_root=drive_root)
+        r = run_notebook(nb, timeout=timeout, path_overrides=path_overrides)
         results.append(r)
         if not r["success"]:
             print(f"\nPipeline stopped at: {nb}")
@@ -137,13 +151,36 @@ def run_pipeline(notebooks: list, timeout: int = 3600, drive_root: str = None) -
 
 if __name__ == "__main__":
     import argparse
+
+    def parse_path_arg(val: str):
+        """Parse ``KEY=VALUE`` arguments."""
+        if "=" not in val:
+            raise argparse.ArgumentTypeError(
+                f"Expected KEY=VALUE, got '{val}'"
+            )
+        k, _, v = val.partition("=")
+        return k.strip(), v.strip()
+
     parser = argparse.ArgumentParser(description="Execute Jupyter notebooks headlessly.")
     parser.add_argument("notebooks", nargs="+", help="Notebook file(s) to execute")
-    parser.add_argument("--drive-root", default=None, help="Override DRIVE_ROOT in notebook config")
-    parser.add_argument("--timeout", type=int, default=3600, help="Per-cell timeout in seconds")
+    parser.add_argument(
+        "--path", action="append", type=parse_path_arg, default=[],
+        dest="path_pairs",
+        help="Override a variable in notebook config (e.g. --path DRIVE_ROOT=/foo)"
+    )
+    parser.add_argument("--timeout", type=int, default=3600,
+                        help="Per-cell timeout in seconds")
+    # Deprecated — kept for backward compatibility
+    parser.add_argument("--drive-root", default=None,
+                        help="Shorthand for --path DRIVE_ROOT=...")
     args = parser.parse_args()
 
-    results = run_pipeline(args.notebooks, timeout=args.timeout, drive_root=args.drive_root)
+    overrides = dict(args.path_pairs)
+    if args.drive_root:
+        overrides["DRIVE_ROOT"] = args.drive_root
+
+    results = run_pipeline(args.notebooks, timeout=args.timeout,
+                           path_overrides=overrides)
 
     any_failed = any(not r["success"] for r in results)
     sys.exit(1 if any_failed else 0)
