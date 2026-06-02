@@ -1,0 +1,55 @@
+{
+    "name": "LightningPoseTrack",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-toolsai.jupyter",
+                "ms-toolsai.jupyter-keymap",
+                "ms-toolsai.jupyter-renderers",
+                "ms-python.isort",
+                "tamasfe.even-better-toml",
+                "yzhang.markdown-all-in-one"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "python.terminal.activateEnvironment": false,
+                "python.linting.enabled": true,
+                "python.linting.pylintEnabled": true,
+                "jupyter.notebookFileRoot": "${workspaceFolder}",
+                "jupyter.allowImportingNotebooks": true,
+                "files.associations": {
+                    "*.ipynb": "jupyter"
+                },
+                "notebook.lineNumbers": "on",
+                "notebook.cellToolbarLocation": {
+                    "default": "right"
+                }
+            }
+        }
+    },
+    "forwardPorts": [
+        8888,
+        8899
+    ],
+    "portsAttributes": {
+        "8888": {
+            "label": "Jupyter Notebook",
+            "onAutoForward": "notify"
+        },
+        "8899": {
+            "label": "Jupyter Lab",
+            "onAutoForward": "notify"
+        }
+    },
+    "postCreateCommand": "echo '--- Dev container ready ---' && python --version && which jupyter",
+    "remoteUser": "root",
+    "runArgs": [
+        "--shm-size=2g"
+    ]
+}

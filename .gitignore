@@ -1,4 +1,5 @@
 labeled_frames/
+train_images/
 __pycache__/
 *.pyc
 *.pyo

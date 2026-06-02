@@ -1,0 +1,44 @@
+FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
+
+LABEL description="LightningPoseTrack GPU Dev Container"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
+    tesseract-ocr \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-colab.txt /tmp/requirements-colab.txt
+
+RUN pip install --no-cache-dir -r /tmp/requirements-colab.txt
+
+RUN pip install --no-cache-dir lightning-pose[all] omegaconf
+
+RUN pip install --no-cache-dir \
+    jupyter \
+    notebook \
+    jupyterlab \
+    ipykernel \
+    ipywidgets
+
+RUN pip install --no-cache-dir \
+    scikit-learn \
+    xgboost \
+    joblib
+
+RUN pip install --no-cache-dir \
+    pylint \
+    autopep8
+
+RUN python -m ipykernel install --user --name=lightningposetrack --display-name="Python 3.12 (LightningPoseTrack)"
+
+RUN rm -rf /root/.cache/pip
+
+WORKDIR /workspace
+ENV PYTHONPATH=/workspace/src:$PYTHONPATH
+
+RUN python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
