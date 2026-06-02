@@ -11,5 +11,8 @@ seaborn
 pyyaml
 tqdm
 
+# OCR for burned-in timestamps
+pytesseract
+
 # Pose estimation (install in dedicated notebook)
 # lightning-pose[all]

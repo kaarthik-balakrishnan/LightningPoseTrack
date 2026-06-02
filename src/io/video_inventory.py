@@ -44,6 +44,50 @@ def extract_recording_time(info: dict) -> str | None:
     return None
 
 
+def extract_burned_timestamp(
+    video_path: str | Path, frame_idx: int = 0
+) -> str | None:
+    try:
+        from pytesseract import image_to_string
+        import cv2
+        import numpy as np
+    except ImportError:
+        return None
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        bottom_path = Path(tmp) / "bottom.png"
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(video_path),
+             "-vf", f"select='eq(n,{frame_idx})',crop=1920:200:0:880",
+             "-vframes", "1", str(bottom_path)],
+            capture_output=True, timeout=60,
+        )
+        if r.returncode != 0:
+            return None
+        gray = cv2.imread(str(bottom_path), cv2.IMREAD_GRAYSCALE)
+        if gray is None:
+            return None
+        scaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        texts = []
+        for psm in (6, 7, 3):
+            try:
+                t = image_to_string(scaled, config=f"--psm {psm} --oem 3").strip()
+                if t:
+                    texts.append(t)
+            except Exception:
+                continue
+        full = " | ".join(texts)
+        for pat in (
+            r"(\d{4})[/.-](\d{2})[/.-](\d{2})\s+(\d{2})[:.](\d{2})[:.](\d{2})",
+            r"(\d{4})[/.-](\d{2})[/.-](\d{2})",
+            r"(\d{2})[:.](\d{2})[:.](\d{2})",
+        ):
+            m = re.search(pat, full)
+            if m:
+                return m.group(0)
+    return None
+
+
 def scan_videos(
     root_dir: str | Path, verbose: bool = True
 ) -> pd.DataFrame:
@@ -104,6 +148,8 @@ def scan_videos(
                 else:
                     nb_frames = int(nb_frames)
                 recording_time = extract_recording_time(info)
+                if not recording_time:
+                    recording_time = extract_burned_timestamp(filepath)
                 opened_ok += 1
                 if verbose:
                     codec = video_stream.get("codec_name", "?")
