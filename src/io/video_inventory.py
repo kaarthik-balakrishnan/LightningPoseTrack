@@ -19,6 +19,31 @@ def parse_camera_from_filename(filename: str) -> int:
     return 0
 
 
+def probe_video_metadata(video_path: str | Path) -> dict:
+    result = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json",
+         "-show_format", "-show_streams", str(video_path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    return json.loads(result.stdout)
+
+
+def extract_recording_time(info: dict) -> str | None:
+    fmt = info.get("format", {})
+    tags = fmt.get("tags", {})
+    for key in ("creation_time", "date", "DATE"):
+        val = tags.get(key)
+        if val:
+            return str(val)
+    for s in info.get("streams", []):
+        stags = s.get("tags", {})
+        for key in ("creation_time", "date", "DATE"):
+            val = stags.get(key)
+            if val:
+                return str(val)
+    return None
+
+
 def scan_videos(
     root_dir: str | Path, verbose: bool = True
 ) -> pd.DataFrame:
@@ -78,10 +103,12 @@ def scan_videos(
                     nb_frames = int(duration * fps) if fps > 0 else 0
                 else:
                     nb_frames = int(nb_frames)
+                recording_time = extract_recording_time(info)
                 opened_ok += 1
                 if verbose:
                     codec = video_stream.get("codec_name", "?")
-                    print(f" — OK ({codec}, {width}x{height}, {fps:.1f} fps, {nb_frames}f)")
+                    ts = f", time={recording_time}" if recording_time else ""
+                    print(f" — OK ({codec}, {width}x{height}, {fps:.1f} fps, {nb_frames}f{ts})")
             except Exception as e:
                 opened_fail += 1
                 if verbose:
@@ -100,6 +127,7 @@ def scan_videos(
                     "height": height,
                     "duration_sec": duration_sec,
                     "duration_min": round(duration_sec / 60, 2),
+                    "recording_time": recording_time or "",
                 }
             )
     if verbose:
