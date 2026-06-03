@@ -25,5 +25,6 @@ build/
 *.asf
 *.mov
 *.mkv
+all_labeled/
 configs/*.yaml
 !configs/*.example.yaml
