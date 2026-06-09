@@ -26,5 +26,6 @@ build/
 *.mov
 *.mkv
 all_labeled/
+calibration_output/
 configs/*.yaml
 !configs/*.example.yaml
