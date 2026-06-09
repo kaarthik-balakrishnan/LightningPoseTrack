@@ -44,7 +44,7 @@ class CalibrationPipeline:
         self.unified: list[dict] = []
 
         self._stage = 0
-        self._total_stages = 8
+        self._total_stages = 9
 
     # ------------------------------------------------------------------
     # Stage 1: Scan
@@ -536,6 +536,118 @@ class CalibrationPipeline:
         lines.append("=" * 60)
 
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Stage 9: Visualize
+    # ------------------------------------------------------------------
+    def plot_timeline(self, output_path: str | Path | None = None):
+        """Generate a Gantt-style timeline visualization of camera activity.
+
+        Saves a PNG with colour-coded horizontal bars per camera, overlap
+        windows highlighted, and per-file labels.
+        """
+        self._print_stage(9, "Visualize", "Generating timeline overview plot")
+        try:
+            from matplotlib import use as mpl_use
+            mpl_use("Agg")
+        except ImportError:
+            pass
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+
+        colours = {1: "#2166AC", 2: "#D6604D", 3: "#4DAF4A", 4: "#FF7F00"}
+        cam_labels = {1: "Camera 1  (10.25 fps)", 2: "Camera 2  (10.25 fps)",
+                      3: "Camera 3  (10.0 fps)",  4: "Camera 4  (5.0 fps)"}
+
+        files = []
+        for cam_str, tl in self.timelines.items():
+            cam = int(cam_str)
+            for e in tl:
+                files.append({
+                    "camera": cam,
+                    "filename": e["filename"],
+                    "start_abs": e["start_time_abs"],
+                    "end_abs": e["start_time_abs"] + e["duration_sec"],
+                    "duration": e["duration_sec"],
+                    "frames": e["frame_count"],
+                })
+
+        if not files:
+            print("  No timeline data to plot. Run build_timelines() first.")
+            return
+
+        t_min = min(f["start_abs"] for f in files)
+        for f in files:
+            f["start_min"] = (f["start_abs"] - t_min) / 60
+            f["end_min"] = (f["end_abs"] - t_min) / 60
+
+        total_min = (max(f["end_abs"] for f in files) - t_min) / 60
+
+        fig, ax = plt.subplots(figsize=(16, 6))
+        cameras = sorted({f["camera"] for f in files})
+        y_pos = {cam: i for i, cam in enumerate(cameras[::-1])}
+
+        for f in files:
+            y = y_pos[f["camera"]]
+            c = colours[f["camera"]]
+            ax.barh(y, max(f["end_min"] - f["start_min"], 0.01),
+                    left=f["start_min"], height=0.55,
+                    color=c, edgecolor="white", linewidth=1.2, zorder=3)
+            label = f["filename"].replace(".ASF", "")
+            if f["end_min"] - f["start_min"] > 0.7:
+                ax.text(f["start_min"] + (f["end_min"] - f["start_min"]) / 2,
+                        y, label, ha="center", va="center",
+                        fontsize=8, color="white", fontweight="bold")
+            else:
+                ax.text(f["end_min"] + 0.03, y, label,
+                        ha="left", va="center", fontsize=7.5, color=c)
+
+        # Compute actual overlap windows from timeline data
+        seen = set()
+        for i, cam_a in enumerate(cameras):
+            for cam_b in cameras[i + 1:]:
+                for fa in files:
+                    if fa["camera"] != cam_a:
+                        continue
+                    for fb in files:
+                        if fb["camera"] != cam_b:
+                            continue
+                        ov_start = max(fa["start_min"], fb["start_min"])
+                        ov_end = min(fa["end_min"], fb["end_min"])
+                        key = (round(ov_start, 2), round(ov_end, 2))
+                        if ov_end - ov_start > 0.02 and key not in seen:
+                            seen.add(key)
+                            ax.axvspan(ov_start, ov_end, color="#FFF3CD",
+                                       alpha=0.35, zorder=0)
+
+        ax.set_yticks(list(y_pos.values()))
+        ax.set_yticklabels([cam_labels[cam] for cam in cameras[::-1]], fontsize=11)
+        ax.set_xlabel("Time (minutes from earliest recording)", fontsize=12, labelpad=8)
+        ax.set_title("Cross-Camera Recording Timeline", fontsize=14, fontweight="bold", pad=12)
+        ax.set_xlim(-0.1, total_min + 0.1)
+        ax.xaxis.set_major_locator(plt.MultipleLocator(0.5))
+        ax.grid(True, alpha=0.3)
+
+        patches = [mpatches.Patch(color=colours[c], label=f"Cam {c}")
+                   for c in sorted(colours) if c in cameras]
+        ax.legend(handles=patches, loc="upper right", framealpha=0.9, fontsize=9)
+
+        total_frames = sum(self.results[r].get("actual_frames", 0)
+                           for r in range(len(self.results)) if "error" not in self.results[r])
+        ax.text(0.5, -0.18,
+                f"Total: {len(self.files)} files  |  {total_frames} frames  |  "
+                f"{total_min:.1f} min span",
+                transform=ax.transAxes, ha="center", fontsize=10, color="#666666")
+
+        plt.tight_layout()
+
+        if output_path is None:
+            output_path = Path(self.root_dir) / "calibration_output" / "timeline_overview.png"
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=200, bbox_inches="tight")
+        print(f"  Timeline plot: {output_path}")
+        plt.close(fig)
 
     def _print_stage(self, stage: int, name: str, desc: str):
         print(f"\n{'─' * 60}")
