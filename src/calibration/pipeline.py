@@ -537,14 +537,59 @@ class CalibrationPipeline:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _pick_tick_interval(total_min: float) -> float:
+        """Pick a reasonable major tick interval (in minutes) for the x-axis."""
+        if total_min < 10:
+            return 1
+        elif total_min < 30:
+            return 2
+        elif total_min < 60:
+            return 5
+        elif total_min < 180:
+            return 10
+        elif total_min < 360:
+            return 20
+        elif total_min < 720:
+            return 30
+        else:
+            return 60
+
+    @staticmethod
+    def _ensure_writable(output_path: Path) -> Path:
+        """Attempt to create parent dir; fall back to /tmp on read-only FS."""
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            # Verify by touching a temp file
+            test = output_path.parent / ".write_test"
+            test.touch()
+            test.unlink()
+        except OSError:
+            fallback = Path("/tmp") / "calibration_output" / output_path.name
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+            print(f"  Warning: cannot write to {output_path.parent}, "
+                  f"falling back to {fallback.parent}")
+            return fallback
+        return output_path
+
     # ------------------------------------------------------------------
     # Stage 9: Visualize
     # ------------------------------------------------------------------
-    def plot_timeline(self, output_path: str | Path | None = None):
+    def plot_timeline(self, output_path: str | Path | None = None,
+                      start_time: float | None = None,
+                      end_time: float | None = None):
         """Generate a Gantt-style timeline visualization of camera activity.
 
-        Saves a PNG with colour-coded horizontal bars per camera, overlap
-        windows highlighted, and per-file labels.
+        Parameters
+        ----------
+        output_path : str or Path, optional
+            Where to save the PNG.  Defaults to
+            ``root_dir / "calibration_output" / "timeline_overview.png"``.
+            Falls back to ``/tmp`` when the primary location is on a
+            read-only filesystem.
+        start_time, end_time : float, optional
+            If given, only show files whose recording interval overlaps
+            the window [*start_time*, *end_time*] (seconds since midnight).
         """
         self._print_stage(9, "Visualize", "Generating timeline overview plot")
         try:
@@ -563,11 +608,18 @@ class CalibrationPipeline:
         for cam_str, tl in self.timelines.items():
             cam = int(cam_str)
             for e in tl:
+                s = e["start_time_abs"]
+                e_abs = s + e["duration_sec"]
+                # Apply range filter
+                if start_time is not None and e_abs < start_time:
+                    continue
+                if end_time is not None and s > end_time:
+                    continue
                 files.append({
                     "camera": cam,
                     "filename": e["filename"],
-                    "start_abs": e["start_time_abs"],
-                    "end_abs": e["start_time_abs"] + e["duration_sec"],
+                    "start_abs": s,
+                    "end_abs": e_abs,
                     "duration": e["duration_sec"],
                     "frames": e["frame_count"],
                 })
@@ -625,7 +677,9 @@ class CalibrationPipeline:
         ax.set_xlabel("Time (minutes from earliest recording)", fontsize=12, labelpad=8)
         ax.set_title("Cross-Camera Recording Timeline", fontsize=14, fontweight="bold", pad=12)
         ax.set_xlim(-0.1, total_min + 0.1)
-        ax.xaxis.set_major_locator(plt.MultipleLocator(0.5))
+
+        interval = self._pick_tick_interval(total_min)
+        ax.xaxis.set_major_locator(plt.MultipleLocator(interval))
         ax.grid(True, alpha=0.3)
 
         patches = [mpatches.Patch(color=colours[c], label=f"Cam {c}")
@@ -643,8 +697,7 @@ class CalibrationPipeline:
 
         if output_path is None:
             output_path = Path(self.root_dir) / "calibration_output" / "timeline_overview.png"
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = self._ensure_writable(Path(output_path))
         fig.savefig(output_path, dpi=200, bbox_inches="tight")
         print(f"  Timeline plot: {output_path}")
         plt.close(fig)

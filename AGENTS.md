@@ -16,11 +16,12 @@ End-to-end pig behavior analysis pipeline using Lightning Pose for pose estimati
 - **Raw videos**: Organized by session folders, camera encoded in filename as `_N.asf` (N=1-4, hyphen-delimited, e.g. `180422-3.asf`)
 - **Docker Hub**: `kaarthikbalakrishnan/lightningposetrack:latest` — GPU image auto-built by GH Action on push to main
 
-## Pipeline (8 notebooks)
+## Pipeline (9 notebooks)
 | # | Notebook | Purpose |
 |---|----------|---------|
 | 01 | Data Audit | Scan videos, parse metadata, inventory report |
 | 02 | Frame Sampling | Sample frames with animal present (background subtraction) |
+| 02b | Cross-Camera Calibration | Probe, timeline, motion sync, unified frame index |
 | 03 | Pose Training | Train Lightning Pose model (GPU) |
 | 04 | Pose Inference | Run model on all videos |
 | 05 | Kinematics | Speed/acceleration per keypoint |
@@ -118,8 +119,10 @@ LightningPoseTrack/
 │   └── docker-gpu.yml   # Auto-build GPU image on push to main
 ├── dev/
 │   └── colab_runner.py  # Headless notebook executor for the fix loop
-├── notebooks/           # 8 Colab notebooks (01-08)
+├── notebooks/           # 9 Colab notebooks (01, 02, 02b, 03-08)
 ├── src/
+│   ├── calibration/
+│   │   └── pipeline.py         # Cross-camera calibration pipeline
 │   ├── io/
 │   │   └── video_inventory.py   # scan_videos(), parse_camera_from_filename()
 │   ├── pose/
@@ -149,6 +152,8 @@ LightningPoseTrack/
 - Notebook 03 includes auto-converter cell (LabelMe JSON → LP CSV)
 - Notebook 03 fixed: `losses_to_use: []` + `train_frames: null` (dali key error)
 - Dev Container setup: CPU Dockerfile, GPU Dockerfile, devcontainer.json, GH Action, colab_runner.py
+- Calibration pipeline (`src/calibration/pipeline.py`) with 9-stage workflow
+- Notebook 02b (Cross-Camera Calibration) with dynamic tick intervals, read-only FS fallback, and custom time-range filtering
 - TODO: Label frames, run notebooks 03-08
 
 ## Labeling Instructions
