@@ -109,11 +109,13 @@ class CalibrationPipeline:
         height = int(video_stream.get("height", 0))
         codec = video_stream.get("codec_name", "?")
         size_bytes = int(meta.get("format", {}).get("size", 0))
-        meta_nb_frames = video_stream.get("nb_frames")
+
+        nb_frames_raw = video_stream.get("nb_frames")
+        meta_nb_frames_from_container = nb_frames_raw is not None
         meta_duration = float(meta.get("format", {}).get("duration", 0))
 
-        if meta_nb_frames is not None:
-            meta_nb_frames = int(meta_nb_frames)
+        if meta_nb_frames_from_container:
+            meta_nb_frames = int(nb_frames_raw)
         else:
             meta_nb_frames = int(meta_duration * fps) if fps > 0 else 0
 
@@ -130,6 +132,7 @@ class CalibrationPipeline:
             "size_bytes": size_bytes,
             "size_mb": round(size_bytes / 1024 / 1024, 1),
             "meta_nb_frames": meta_nb_frames,
+            "meta_nb_frames_from_container": meta_nb_frames_from_container,
             "meta_duration_sec": round(meta_duration, 3),
             "actual_frames": actual_frames,
             "actual_duration_sec": round(actual_frames / fps, 3) if fps > 0 else 0.0,
@@ -165,18 +168,63 @@ class CalibrationPipeline:
             return int(out)
         raise ValueError(f"could not count frames: {out}")
 
+    def _check_decode_errors(self, filename: str) -> bool:
+        """Decode the full video and check for corruption errors.
+
+        Returns True if no decode errors found.  The non-monotonic DTS
+        warning is suppressed — it's harmless in ASF (B-frame reordering).
+        """
+        path = Path(self.root_dir, filename)
+        if not path.exists():
+            path = Path(filename)
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(path), "-f", "null", "-",
+             "-v", "error"],
+            capture_output=True, text=True, timeout=300,
+        )
+        errors = [
+            l for l in r.stderr.split("\n") if l.strip()
+            and "non monotonically increasing dts" not in l.lower()
+        ]
+        return len(errors) == 0
+
     # ------------------------------------------------------------------
     # Stage 3: Quality
     # ------------------------------------------------------------------
     def quality(self) -> list[dict]:
         self._print_stage(3, "Quality", "Checking for dropped frames and metadata accuracy")
         flagged = []
+        n_unverifiable = 0
+        n_decode_ok = 0
         for r in self.results:
             if "error" in r:
                 flagged.append(r)
                 continue
+
             meta_frames = r["meta_nb_frames"]
             actual_frames = r["actual_frames"]
+            from_container = r.get("meta_nb_frames_from_container", False)
+
+            if not from_container:
+                decode_ok = self._check_decode_errors(r["filename"])
+                if decode_ok:
+                    print(f"  {r['filename']}: ASF OK — {actual_frames} frames, "
+                          f"no decode errors (container has no nb_frames)")
+                    r["frame_mismatch"] = False
+                    r["frame_diff"] = 0
+                    r["frame_decode_ok"] = True
+                    n_decode_ok += 1
+                else:
+                    print(f"  {r['filename']}: DECODE ERRORS — "
+                          f"{actual_frames} frames, decode errors detected")
+                    r["frame_mismatch"] = True
+                    r["frame_diff"] = 0
+                    r["frame_decode_ok"] = False
+                    flagged.append(r)
+                r["frame_unverifiable"] = True
+                n_unverifiable += 1
+                continue
+
             frames_ok = actual_frames == meta_frames
             if not frames_ok:
                 diff = actual_frames - meta_frames
@@ -184,13 +232,23 @@ class CalibrationPipeline:
                       f"meta={meta_frames}, actual={actual_frames} ({diff:+d})")
                 r["frame_mismatch"] = True
                 r["frame_diff"] = diff
+                r["frame_unverifiable"] = False
                 flagged.append(r)
             else:
                 print(f"  {r['filename']}: OK — {actual_frames} frames matches metadata")
                 r["frame_mismatch"] = False
                 r["frame_diff"] = 0
-        print(f"  Checked {len(self.results)} files, "
-              f"{len(flagged)} flagged\n")
+                r["frame_unverifiable"] = False
+
+        summary = f"  Checked {len(self.results)} files, "
+        if n_unverifiable:
+            summary += f"{len(flagged)} flagged ({n_unverifiable} unverifiable"
+            if n_decode_ok:
+                summary += f", {n_decode_ok} decode-verified"
+            summary += ")"
+        else:
+            summary += f"{len(flagged)} flagged"
+        print(summary + "\n")
         return flagged
 
     # ------------------------------------------------------------------
