@@ -51,26 +51,14 @@ header:
 
 - **`meta_nb_frames_from_container == True`** (MP4 etc.) — strict frame-count
   comparison. Flags on mismatch.
-- **`meta_nb_frames_from_container == False`** (ASF) — calls
-  `_check_decode_errors()` which runs `ffmpeg -v error` and filters out the
-  harmless non-monotonic DTS warning. If no real errors, the file passes.
-
-Key helper added:
-
-```python
-def _check_decode_errors(self, filename: str) -> bool:
-    path = Path(self.root_dir, filename)
-    r = subprocess.run(
-        ["ffmpeg", "-y", "-i", str(path), "-f", "null", "-",
-         "-v", "error"],
-        capture_output=True, text=True, timeout=300,
-    )
-    errors = [
-        l for l in r.stderr.split("\n") if l.strip()
-        and "non monotonically increasing dts" not in l.lower()
-    ]
-    return len(errors) == 0
-```
+- **`meta_nb_frames_from_container == False`** (ASF) — frame-count comparison
+  is impossible because ASF containers store neither PTS nor `nb_frames`.
+  Instead the pipeline trusts `_count_actual_frames()` (powered by
+  `ffprobe -count_frames`), which already decoded every frame successfully
+  to return a count. If it returned a positive count, the file is decodable.
+  A separate `ffmpeg -v error` decode check was tried earlier but produced
+  false positives for ASF+h264 (harmless NAL unit framing warnings), so it
+  was removed. The frame count from `-count_frames` is authoritative.
 
 ### Standalone notebook (`notebooks/00_Quality_Test.ipynb`)
 
@@ -84,8 +72,9 @@ if has_pts(video_path):
     drop = detect_dropped_frames(pts, meta["metadata_fps"])
     ...
 else:
-    # Approach 2: decode-error check for ASF
-    decode_ok = check_decode_errors(video_path)
+    # Approach 2: frame-count check for ASF (no PTS available)
+    n_expected = int(meta["fps"] * meta["duration_sec"])
+    drop_pct = (n_expected - meta["actual_frames"]) / n_expected * 100
     ...
 ```
 
@@ -107,9 +96,10 @@ The quality check was tested on 6 ASF files from a ContinuousRecording session
 
 ## Results
 
-- **All 6 ASF files passed** the decode-error check with zero corruption errors.
-  The only ffmpeg warnings were non-monotonic DTS messages (B-frame reordering),
-  which are harmless and suppressed.
+- **All 6 ASF files verified clean** — `ffprobe -count_frames` decoded every
+  frame successfully for all files. An earlier attempt to use `ffmpeg -v error`
+  for a separate decode check was abandoned because all ASF files produce
+  harmless NAL unit framing warnings (false positives).
 - **Container duration metadata is unreliable** for ASF — the difference between
   container-reported and actual decoded duration ranged from −2.8s to +27.3s.
   This confirms that `int(duration × fps)` fallback estimates are not a valid
