@@ -159,27 +159,15 @@ def load_all_homographies(
 def build_world_layout(
     chamber_dims: dict[int, dict],
     overlaps_cm: dict[tuple[int, int], float],
+    camera_order: list[int] | None = None,      # ← new parameter
 ) -> list[dict]:
     """
-    Compute world-space bounding boxes for a linear camera chain.
-
-    Parameters
-    ----------
-    chamber_dims : {camera_id: {"width_cm": float, "height_cm": float}}
-        Physical size of each camera's visible area.
-        'width_cm'  = dimension along the direction of travel (X axis)
-        'height_cm' = dimension perpendicular to travel (Y axis)
-    overlaps_cm  : {(cam_a, cam_b): float}
-        Physical overlap between adjacent cameras along X (cm).
-
-    Returns
-    -------
-    list of dicts with keys:
-        camera, x_min, x_max, y_min, y_max,
-        world_corners  (TL, TR, BR, BL as world (X,Y) tuples)
+    camera_order : physical left-to-right sequence of camera IDs.
+                   Defaults to ascending sort if not provided.
+                   Example for a 4→3→2→1 chain: [4, 3, 2, 1]
     """
-    cameras = sorted(chamber_dims.keys())
-    layout  = []
+    cameras  = camera_order if camera_order is not None else sorted(chamber_dims.keys())
+    layout   = []
     x_cursor = 0.0
 
     for i, cam in enumerate(cameras):
@@ -189,27 +177,28 @@ def build_world_layout(
 
         x_min = x_cursor
         x_max = x_cursor + w
-        y_min = 0.0
-        y_max = h
 
         layout.append({
             "camera":  cam,
             "x_min":   round(x_min, 4),
             "x_max":   round(x_max, 4),
-            "y_min":   round(y_min, 4),
-            "y_max":   round(y_max, 4),
-            "world_corners": [          # TL, TR, BR, BL (matches click order)
-                (x_min, y_min),
-                (x_max, y_min),
-                (x_max, y_max),
-                (x_min, y_max),
+            "y_min":   0.0,
+            "y_max":   round(h, 4),
+            "world_corners": [
+                (x_min, 0.0),   # top-left
+                (x_max, 0.0),   # top-right
+                (x_max, h),     # bottom-right
+                (x_min, h),     # bottom-left
             ],
         })
 
-        # Advance cursor, subtracting any overlap with the next camera
         if i < len(cameras) - 1:
             next_cam = cameras[i + 1]
-            ov = overlaps_cm.get((cam, next_cam), overlaps_cm.get((next_cam, cam), 0.0))
+            # Look up overlap in both directions
+            ov = overlaps_cm.get(
+                (cam, next_cam),
+                overlaps_cm.get((next_cam, cam), 0.0)
+            )
             x_cursor += w - ov
 
     return layout
