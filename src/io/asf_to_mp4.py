@@ -33,8 +33,12 @@ def convert_asf_to_mp4(
     if not folder.is_dir():
         raise FileNotFoundError(f"Not a directory: {folder}")
 
-    pattern = "**/*.asf" if recursive else "*.asf"
-    asf_files = sorted(folder.glob(pattern))
+    asf_files = sorted(
+        p for p in folder.rglob("*")
+        if p.is_file()
+        and p.suffix.lower() == ".asf"
+        and not p.name.startswith("._")
+    )
     if not asf_files:
         if verbose:
             print(f"No .asf files found in {folder}")
